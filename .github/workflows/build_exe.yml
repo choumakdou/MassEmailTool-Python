@@ -1,4 +1,4 @@
-name: Build Mass Email Tool v4
+name: Build Mass Email Tool v5
 
 on:
   push:
@@ -21,19 +21,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # pywin32 is no longer needed — the tool talks to mail servers
-          # directly over SMTP. openpyxl + pyinstaller are all we need.
-          pip install openpyxl pyinstaller
+          # customtkinter = the modern dark-mode UI library
+          pip install openpyxl customtkinter pyinstaller
 
       - name: Build EXE
         run: |
-          # No --noconsole: the console window is useful for the first-run
-          # bootstrap messages (template created, credentials prompt, etc.)
-          pyinstaller --onefile --name "MassEmailTool_v4" mass_email_v4.py
+          # --noconsole       : the GUI is the only window; no cmd box
+          # --collect-all     : bundles CustomTkinter's theme + asset files
+          # --clean           : nuke any stale PyInstaller cache
+          # --noconfirm       : don't prompt on overwrite
+          pyinstaller --noconfirm --clean --onefile --noconsole \
+            --name "MassEmailTool_v5" \
+            --collect-all customtkinter \
+            mass_email_v5.py
 
       - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MassEmailTool_v4_Windows
-          path: dist/MassEmailTool_v4.exe
+          name: MassEmailTool_v5_Windows
+          path: dist/MassEmailTool_v5.exe
           retention-days: 30
