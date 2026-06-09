@@ -1,12 +1,14 @@
 """
-Mass Email Marketing Tool (v5)
+Mass Email Marketing Tool (v6)
 ------------------------------
-Modern dark-mode desktop UI (CustomTkinter) on top of the v4 SMTP engine.
+Same modern dark-mode desktop UI as v5, with one addition: a
+"Custom SMTP" provider option that lets the user point at any
+SMTP server (custom domain on Microsoft 365, Google Workspace,
+Zoho, self-hosted Exchange, etc.).
 
-  • Auto-bootstraps Email_List.xlsx + Attachments/ on first run
-  • Saves credentials to email_settings.json next to the .exe
-  • Background-thread SMTP loop with live log + progress bar
-  • No console window when launched as a PyInstaller --noconsole bundle
+SSL/TLS is auto-detected by port:
+  - 465 -> SMTP_SSL  (implicit TLS)
+  - all others -> STARTTLS (opportunistic TLS)
 """
 import os
 import sys
@@ -37,10 +39,14 @@ SETTINGS_FILE   = "email_settings.json"
 TEMPLATE_FILE   = "Email_List.xlsx"
 ATTACHMENTS_DIR = "Attachments"
 
+# Each provider is a label + (server, port). The "custom" entry has an
+# empty server — filled in by the user at runtime. Port 465 is treated
+# as implicit SSL automatically; everything else uses STARTTLS.
 PROVIDERS = {
-    "gmail":     {"label": "Gmail",        "server": "smtp.gmail.com",        "port": 587},
-    "outlook":   {"label": "Outlook.com",  "server": "smtp-mail.outlook.com", "port": 587},
-    "office365": {"label": "Office 365",   "server": "smtp.office365.com",    "port": 587},
+    "gmail":     {"label": "Gmail",         "server": "smtp.gmail.com",         "port": 587},
+    "outlook":   {"label": "Outlook.com",   "server": "smtp-mail.outlook.com",  "port": 587},
+    "office365": {"label": "Office 365",    "server": "smtp.office365.com",     "port": 587},
+    "custom":    {"label": "Custom SMTP",   "server": "",                       "port": 587},
 }
 
 COL_NAME, COL_EMAIL, COL_SUBJECT, COL_BODY = 1, 2, 3, 4
@@ -132,18 +138,39 @@ def attach_file(msg, filepath):
     msg.attach(part)
 
 
+def get_smtp_target(settings):
+    """Return (server, port, use_ssl) for the current settings.
+
+    - For named providers, look up in PROVIDERS.
+    - For "custom", pull server/port from the saved settings.
+    - Port 465 -> implicit SSL; everything else -> STARTTLS.
+    """
+    if settings.get("provider") == "custom":
+        server = (settings.get("server") or "").strip()
+        port   = int(settings.get("port") or 587)
+    else:
+        cfg    = PROVIDERS[settings["provider"]]
+        server = cfg["server"]
+        port   = cfg["port"]
+    return server, port, (port == 465)
+
+
 def smtp_handshake(settings, timeout=30):
-    cfg = PROVIDERS[settings["provider"]]
-    server = smtplib.SMTP(cfg["server"], cfg["port"], timeout=timeout)
+    server_addr, port, use_ssl = get_smtp_target(settings)
+    ctx = ssl.create_default_context()
+    if use_ssl:
+        server = smtplib.SMTP_SSL(server_addr, port, timeout=timeout, context=ctx)
+    else:
+        server = smtplib.SMTP(server_addr, port, timeout=timeout)
     server.ehlo()
-    server.starttls(context=ssl.create_default_context())
-    server.ehlo()
+    if not use_ssl:
+        server.starttls(context=ctx)
+        server.ehlo()
     server.login(settings["email"], settings["password"])
     return server
 
 
 def open_in_default_app(filepath):
-    """Open a file or folder in the OS default handler."""
     if not os.path.exists(filepath):
         return False
     try:
@@ -184,8 +211,8 @@ class EmailToolApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title("Mass Email Marketing Tool")
-        self.geometry("860x720")
-        self.minsize(740, 640)
+        self.geometry("860x760")
+        self.minsize(740, 680)
 
         self.log_queue: "queue.Queue[str]" = queue.Queue()
         self.running = False
@@ -207,7 +234,7 @@ class EmailToolApp(ctk.CTk):
                      font=ctk.CTkFont(size=22, weight="bold")
                      ).pack(pady=(18, 2), padx=20, anchor="w")
         ctk.CTkLabel(self,
-                     text="Personalized bulk email from a spreadsheet · Gmail / Outlook / Office 365",
+                     text="Personalized bulk email from a spreadsheet · Gmail / Outlook / Office 365 / Custom SMTP",
                      text_color=("gray60", "gray70"),
                      font=ctk.CTkFont(size=12)
                      ).pack(padx=22, anchor="w")
@@ -223,10 +250,34 @@ class EmailToolApp(ctk.CTk):
         row1 = ctk.CTkFrame(creds, fg_color="transparent")
         row1.pack(fill="x", padx=14, pady=4)
         ctk.CTkLabel(row1, text="Provider", width=90, anchor="w").pack(side="left")
-        self.provider_var = tk.StringVar(value="gmail")
+        self.provider_var = tk.StringVar(value="office365")
         ctk.CTkOptionMenu(row1, variable=self.provider_var,
                           values=list(PROVIDERS.keys()),
+                          command=self._on_provider_change,
                           width=240).pack(side="left")
+
+        # Custom SMTP fields (hidden unless "custom" is selected)
+        self.custom_frame = ctk.CTkFrame(creds, fg_color="transparent")
+        crow = ctk.CTkFrame(self.custom_frame, fg_color="transparent")
+        crow.pack(fill="x", pady=2)
+        ctk.CTkLabel(crow, text="SMTP Server", width=90, anchor="w",
+                     text_color=("gray40", "gray70")
+                     ).pack(side="left")
+        self.custom_server_var = tk.StringVar()
+        ctk.CTkEntry(crow, textvariable=self.custom_server_var, width=260,
+                     placeholder_text="smtp.your-company.com"
+                     ).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(crow, text="Port", anchor="w",
+                     text_color=("gray40", "gray70")
+                     ).pack(side="left")
+        self.custom_port_var = tk.StringVar(value="587")
+        ctk.CTkEntry(crow, textvariable=self.custom_port_var, width=70
+                     ).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(self.custom_frame,
+                     text="Tip: 465 = implicit SSL · 587/25/2525 = STARTTLS",
+                     text_color=("gray50", "gray60"),
+                     font=ctk.CTkFont(size=11)
+                     ).pack(anchor="w", padx=104, pady=(0, 4))
 
         # Email
         row2 = ctk.CTkFrame(creds, fg_color="transparent")
@@ -234,7 +285,7 @@ class EmailToolApp(ctk.CTk):
         ctk.CTkLabel(row2, text="Email", width=90, anchor="w").pack(side="left")
         self.email_var = tk.StringVar()
         ctk.CTkEntry(row2, textvariable=self.email_var, width=340,
-                     placeholder_text="you@gmail.com").pack(side="left")
+                     placeholder_text="you@your-company.com").pack(side="left")
 
         # Password
         row3 = ctk.CTkFrame(creds, fg_color="transparent")
@@ -243,7 +294,7 @@ class EmailToolApp(ctk.CTk):
         self.password_var = tk.StringVar()
         self.password_entry = ctk.CTkEntry(row3, textvariable=self.password_var,
                                             width=340, show="*",
-                                            placeholder_text="account password (or App Password if 2FA is on)")
+                                            placeholder_text="account password (or App Password if MFA is on)")
         self.password_entry.pack(side="left")
         self.show_pw = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(row3, text="Show", variable=self.show_pw,
@@ -327,6 +378,13 @@ class EmailToolApp(ctk.CTk):
                        text_color=("gray10", "gray90")
                        ).pack(side="left")
 
+    # ---------- Provider change ----------
+    def _on_provider_change(self, value):
+        if value == "custom":
+            self.custom_frame.pack(fill="x", padx=14, pady=4)
+        else:
+            self.custom_frame.pack_forget()
+
     # ---------- Bootstrap ----------
     def _bootstrap(self):
         os.makedirs(get_attachments_dir(), exist_ok=True)
@@ -336,12 +394,17 @@ class EmailToolApp(ctk.CTk):
             self._log(f"[setup] Created attachments folder → {get_attachments_dir()}")
         self.settings = load_settings()
         if self.settings:
-            self.provider_var.set(self.settings.get("provider", "gmail"))
+            self.provider_var.set(self.settings.get("provider", "office365"))
             self.email_var.set(self.settings.get("email", ""))
             self.password_var.set(self.settings.get("password", ""))
+            if self.settings.get("provider") == "custom":
+                self.custom_server_var.set(self.settings.get("server", ""))
+                self.custom_port_var.set(str(self.settings.get("port", 587)))
             self._log(f"[setup] Loaded saved credentials for {self.settings.get('email')}")
         else:
             self._log("[setup] No saved credentials yet — fill in the form above.")
+        # Make sure the custom frame is shown iff needed.
+        self._on_provider_change(self.provider_var.get())
         self._refresh_file_status()
 
     def _refresh_file_status(self):
@@ -390,13 +453,25 @@ class EmailToolApp(ctk.CTk):
             return None
         if not email or not password:
             return None
-        return {"provider": provider, "email": email, "password": password}
+        out = {"provider": provider, "email": email, "password": password}
+        if provider == "custom":
+            server = self.custom_server_var.get().strip()
+            try:
+                port = int(self.custom_port_var.get().strip() or "587")
+            except ValueError:
+                port = 587
+            if not server:
+                return None
+            out["server"] = server
+            out["port"]   = port
+        return out
 
     def _save_settings(self):
         s = self._collect_settings()
         if not s:
             messagebox.showwarning("Missing info",
-                "Please pick a provider and enter both email and password.")
+                "Please fill in email + password.\n"
+                "For Custom SMTP, also fill in the server and port.")
             return
         save_settings(s)
         self.settings = s
@@ -415,21 +490,29 @@ class EmailToolApp(ctk.CTk):
         s = self._collect_settings()
         if not s:
             messagebox.showwarning("Missing info",
-                "Please pick a provider and enter both email and password.")
+                "Please fill in email + password.\n"
+                "For Custom SMTP, also fill in the server and port.")
             return
-        self._log(f"[test] Connecting to {s['provider']} SMTP as {s['email']} ...")
+        try:
+            srv, port, ssl_used = get_smtp_target(s)
+        except Exception as e:
+            messagebox.showerror("Bad settings", str(e)); return
+        self._log(f"[test] Connecting to {srv}:{port} "
+                  f"({'SSL' if ssl_used else 'STARTTLS'}) as {s['email']} ...")
         def worker():
             try:
                 server = smtp_handshake(s, timeout=15)
                 server.quit()
                 self._log("[test] ✅  Connection successful.")
                 self.after(0, lambda: messagebox.showinfo("Connection OK",
-                    f"Connected to {s['provider']} as {s['email']}."))
+                    f"Connected to {srv}:{port} as {s['email']}."))
             except Exception as e:
                 self._log(f"[test] ❌  FAILED: {e}")
                 self.after(0, lambda e=e: messagebox.showerror("Connection failed",
-                    f"{e}\n\nTip: with 2-Step Verification enabled, you usually need "
-                    f"an App Password rather than your account password."))
+                    f"{e}\n\nTip: with MFA enabled, you usually need an App Password "
+                    f"rather than your account password.\n"
+                    f"Microsoft: https://mysignins.microsoft.com/security-info\n"
+                    f"Google:    https://myaccount.google.com/apppasswords"))
         threading.Thread(target=worker, daemon=True).start()
 
     # ---------- Open files / folders ----------
@@ -449,7 +532,8 @@ class EmailToolApp(ctk.CTk):
         s = self._collect_settings()
         if not s:
             messagebox.showwarning("Missing info",
-                "Please pick a provider and enter both email and password.")
+                "Please fill in email + password.\n"
+                "For Custom SMTP, also fill in the server and port.")
             return
         self.settings = s
         save_settings(s)
@@ -459,9 +543,10 @@ class EmailToolApp(ctk.CTk):
                     "No recipients with Status != 'Sent' were found.\n\nRun anyway?"):
                 return
         else:
+            srv, port, ssl_used = get_smtp_target(s)
+            via = f" via {s['provider']}" if s['provider'] != "custom" else f" via {srv}:{port}"
             if not messagebox.askyesno("Confirm",
-                    f"About to send {self.total_to_send} email(s) via "
-                    f"{s['provider']} as {s['email']}.\n\nProceed?"):
+                    f"About to send {self.total_to_send} email(s){via} as {s['email']}.\n\nProceed?"):
                 return
         self.stop_flag = False
         self.done_count = 0
@@ -486,12 +571,15 @@ class EmailToolApp(ctk.CTk):
             sheet = wb.active
             try:
                 server = smtp_handshake(self.settings)
+                srv, port, ssl_used = get_smtp_target(self.settings)
+                mode = "SSL" if ssl_used else "STARTTLS"
+                self._log(f"[send] Connected to {srv}:{port} ({mode}) as {self.settings['email']}.")
             except Exception as e:
                 self._log(f"[fatal] SMTP connection failed: {e}")
                 self.after(0, lambda: messagebox.showerror("SMTP failed",
                     f"Could not connect:\n{e}\n\nCheck credentials / App Password."))
                 return
-            self._log(f"[send] Connected. Sending to {self.total_to_send} recipient(s)…")
+            self._log(f"[send] Sending to {self.total_to_send} recipient(s)…")
             try:
                 for row in range(2, sheet.max_row + 1):
                     if self.stop_flag:
@@ -566,7 +654,6 @@ def main():
         app = EmailToolApp()
         app.mainloop()
     except Exception as e:
-        # Last-ditch error display (e.g. customtkinter not installed).
         try:
             root = tk.Tk()
             root.withdraw()

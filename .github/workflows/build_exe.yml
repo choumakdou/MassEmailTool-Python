@@ -1,4 +1,4 @@
-name: Build Mass Email Tool v5
+name: Build Mass Email Tool v6
 
 on:
   push:
@@ -27,11 +27,11 @@ jobs:
       - name: Build EXE
         # Single line — PowerShell on windows-latest chokes on `\` line
         # continuations in YAML literal blocks.
-        run: pyinstaller --noconfirm --clean --onefile --noconsole --name "MassEmailTool_v5" --collect-all customtkinter mass_email_v5.py
+        run: pyinstaller --noconfirm --clean --onefile --noconsole --name "MassEmailTool_v6" --collect-all customtkinter mass_email_v6.py
 
       - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MassEmailTool_v5_Windows
-          path: dist/MassEmailTool_v5.exe
+          name: MassEmailTool_v6_Windows
+          path: dist/MassEmailTool_v6.exe
           retention-days: 30
