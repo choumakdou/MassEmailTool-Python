@@ -25,15 +25,9 @@ jobs:
           pip install openpyxl customtkinter pyinstaller
 
       - name: Build EXE
-        run: |
-          # --noconsole       : the GUI is the only window; no cmd box
-          # --collect-all     : bundles CustomTkinter's theme + asset files
-          # --clean           : nuke any stale PyInstaller cache
-          # --noconfirm       : don't prompt on overwrite
-          pyinstaller --noconfirm --clean --onefile --noconsole \
-            --name "MassEmailTool_v5" \
-            --collect-all customtkinter \
-            mass_email_v5.py
+        # Single line — PowerShell on windows-latest chokes on `\` line
+        # continuations in YAML literal blocks.
+        run: pyinstaller --noconfirm --clean --onefile --noconsole --name "MassEmailTool_v5" --collect-all customtkinter mass_email_v5.py
 
       - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
