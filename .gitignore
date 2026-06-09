@@ -1,0 +1,22 @@
+# --- Personal data — never commit ---
+email_settings.json
+Email_List.xlsx
+Attachments/*
+!Attachments/.gitkeep
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- PyInstaller build artifacts ---
+*.spec
+dist/
+build/
+
+# --- IDE / editor ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
